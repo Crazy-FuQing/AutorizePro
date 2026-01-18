@@ -529,11 +529,12 @@ class TableRowFilter(RowFilter):
 
 
 class UpdateTableEDT(Runnable):
-    def __init__(self, extender, action, firstRow, lastRow):
+    def __init__(self, extender, action, firstRow, lastRow, column=None):
         self._extender = extender
         self._action = action
         self._firstRow = firstRow
         self._lastRow = lastRow
+        self._column = column
 
     def run(self):
         if self._action == "insert":
@@ -544,11 +545,23 @@ class UpdateTableEDT(Runnable):
         elif self._action == "update":
             try:
                 self._extender.tableModel.fireTableRowsUpdated(self._firstRow, self._lastRow)
+                # 如果有AI分析结果，确保触发表格重绘
+                if hasattr(self._extender, 'logTable') and self._extender.logTable is not None:
+                    try:
+                        self._extender.logTable.repaint()
+                    except:
+                        pass
             except:
                 pass
         elif self._action == "delete":
             try:
                 self._extender.tableModel.fireTableRowsDeleted(self._firstRow, self._lastRow)
+            except:
+                pass
+        elif self._action == "cell":
+            try:
+                if self._column is not None:
+                    self._extender.tableModel.fireTableCellUpdated(self._firstRow, self._column)
             except:
                 pass
 

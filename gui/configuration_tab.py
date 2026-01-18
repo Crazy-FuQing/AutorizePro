@@ -98,7 +98,7 @@ class ConfigurationTab():
                                    "gpt-4o-mini", "gpt-4o",
                                    "glm-4-flash", "glm-4-air",
                                    "hunyuan-lite", "hunyuan-standard",
-                                   "gemini-1.5-flash", "gemini-2.0-flash", "gemini-2.5-flash"]
+                                   "gemini-2.5-flash", "gemini-2.0-flash", "gemini-2.5-pro"]
         
         # 支持的模型厂商列表
         self._supportedVendors = ["qwen", "deepseek", "gpt", "glm", "hunyuan", "gemini"]

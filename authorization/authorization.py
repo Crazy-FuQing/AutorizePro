@@ -13,12 +13,11 @@ import datetime
 import time
 import hashlib
 import json
-from java.net import URL, HttpURLConnection
+from java.net import URL, HttpURLConnection, SocketException, SocketTimeoutException, Proxy, InetSocketAddress
 from java.io import BufferedReader, InputStreamReader, OutputStreamWriter, EOFException, IOException
 from java.lang import StringBuilder
 from javax.swing import SwingUtilities
 from javax.net.ssl import SSLHandshakeException, SSLSocketFactory
-from java.net import SocketException
 from javax.swing.event import DocumentListener
 from threading import Lock
 
@@ -474,8 +473,18 @@ def pre_check(self, oldStatusCode, newStatusCode, oldContent, newContent, modify
 
 def checkBypass(self, oriUrl, oriBody, oldStatusCode, newStatusCode, oldContent, newContent, filters, requestResponse,
                 andOrEnforcement, isAuthorized):
+    global cache_access_order
     AI_res = ""
     if isAuthorized and self.apiKeyEnabledCheckbox.isSelected():
+        # 检查AI分析触发条件
+        status_match = (newStatusCode == oldStatusCode)
+        size_ok = (50 < len(oldContent) < 7000)
+        
+        if not status_match:
+            print("[AI] Skipped: Status code mismatch (old=%s, new=%s)" % (oldStatusCode, newStatusCode))
+        elif not size_ok:
+            print("[AI] Skipped: Response size out of range (%d bytes, need 50-7000)" % len(oldContent))
+        
         if newStatusCode == oldStatusCode and 50 < len(oldContent) < 7000:
             # 优化的缓存键生成机制：考虑URL、请求体、响应特征等多维度信息
             try:
@@ -686,7 +695,15 @@ def checkBypass(self, oriUrl, oriBody, oldStatusCode, newStatusCode, oldContent,
                         print("-" * 80)
                         AI_res = ""
                     else:
-                        AI_res = api_result_mapping.get(AI_result, AI_result)
+                        # 确保AI_result是字符串并转换为小写进行匹配
+                        AI_result_lower = str(AI_result).lower().strip()
+                        AI_res = api_result_mapping.get(AI_result_lower, AI_result)
+                        
+                        # 如果映射失败，使用原始值（可能是其他格式的结果）
+                        if AI_res == AI_result and AI_result_lower not in ["true", "false", "unknown"]:
+                            # 如果结果不在预期范围内，尝试映射到unknown
+                            print("[WARNING] Unexpected AI result format: %s, mapping to unknown" % AI_result)
+                            AI_res = self.IS_ENFORCED_STR
                         
                         # 获取AI分析的原因（从最后一次API响应中提取）
                         ai_reason = getattr(self, '_last_ai_reason', '')
@@ -956,7 +973,30 @@ def extract_res_value(self, response_string):
         if not response_string or response_string.strip() == "":
             return {"res": "", "reason": ""}
         
-        # 首先尝试解析Ollama/OpenAI格式的响应（包含choices字段）
+        # 首先尝试解析Gemini原生API格式的响应（包含candidates字段）
+        try:
+            parsed_response = json.loads(response_string)
+            if isinstance(parsed_response, dict) and 'candidates' in parsed_response:
+                candidates = parsed_response.get('candidates', [])
+                if candidates and len(candidates) > 0:
+                    content = candidates[0].get('content', {})
+                    parts = content.get('parts', [])
+                    if parts and len(parts) > 0:
+                        text = parts[0].get('text', '')
+                        if text:
+                            # 递归调用处理content内容
+                            return extract_res_value(self, text)
+        except ValueError as json_err:
+            # JSON 解析失败：不是有效的 JSON 格式，继续其他解析方式
+            pass
+        except (KeyError, IndexError, TypeError) as struct_err:
+            # 结构错误：JSON 结构不符合预期
+            print("[AI PARSE] Unexpected Gemini response structure: %s" % str(struct_err)[:50])
+        except Exception as e:
+            # 其他错误
+            print("[AI PARSE] Error parsing Gemini format: %s" % str(e)[:50])
+        
+        # 尝试解析Ollama/OpenAI格式的响应（包含choices字段）
         try:
             parsed_response = json.loads(response_string)
             if isinstance(parsed_response, dict) and 'choices' in parsed_response:
@@ -1085,39 +1125,22 @@ def _extract_reason_from_json(content):
 
 
 def generate_prompt(self, modelName, system_prompt, user_prompt):
-    if modelName.lower().startswith("gemini"):
-        return u"""
-        {
-            "model": "%s",
-            "reasoning_effort": "none",
-            "messages": [
-                {
-                    "role": "system",
-                    "content": "%s"
-                },
-                {
-                    "role": "user", 
-                    "content": "%s"
-                }
-            ]
-        }
-            """ % (modelName, system_prompt, user_prompt)
-    else:
-        return u"""
-        {
-            "model": "%s",
-            "messages": [
-                {
-                    "role": "system",
-                    "content": "%s"
-                },
-                {
-                    "role": "user", 
-                    "content": "%s"
-                }
-            ]
-        }
-            """ % (modelName, system_prompt, user_prompt)
+    # 统一使用OpenAI格式（所有主流模型都支持）
+    return u"""
+    {
+        "model": "%s",
+        "messages": [
+            {
+                "role": "system",
+                "content": "%s"
+            },
+            {
+                "role": "user", 
+                "content": "%s"
+            }
+        ]
+    }
+        """ % (modelName, system_prompt, user_prompt)
 
 
 def call_dashscope_api(self, apiKey, modelName, oriUrl, oriBody, res1, res2, customApiUrl=""):
@@ -1261,7 +1284,7 @@ def request_dashscope_api(self, api_key, modelName, orgUrl, request_body, custom
         "gpt": "https://api.openai.com/v1/chat/completions",
         "glm": "https://open.bigmodel.cn/api/paas/v4/chat/completions",
         "hunyuan": "https://api.hunyuan.cloud.tencent.com/v1/chat/completions",
-        "gemini": "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
+        "gemini": "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",  # Gemini OpenAI兼容API (推荐: gemini-2.5-flash)
         "default": "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions"
     }
     
@@ -1303,12 +1326,52 @@ def request_dashscope_api(self, api_key, modelName, orgUrl, request_body, custom
                 
             url = URL(api_url)
             
+            # 尝试从Burp配置中获取代理设置
+            proxy = None
+            try:
+                # 通过Burp API获取配置
+                config_json = self._callbacks.saveConfigAsJson()
+                if config_json:
+                    config = json.loads(config_json)
+                    
+                    # 查找upstream proxy配置
+                    if "proxy" in config and "request_listeners" in config["proxy"]:
+                        upstream_proxies = config["proxy"].get("upstream_proxy_servers", [])
+                        
+                        if upstream_proxies:
+                            # 使用第一个启用的代理
+                            for proxy_config in upstream_proxies:
+                                if proxy_config.get("enabled", False):
+                                    proxy_host = proxy_config.get("destination_host", "")
+                                    proxy_port = proxy_config.get("destination_port", 0)
+                                    
+                                    if proxy_host and proxy_port:
+                                        proxy = Proxy(Proxy.Type.HTTP, InetSocketAddress(proxy_host, proxy_port))
+                                        if retry_count == 0:  # 只在第一次尝试时打印
+                                            print("[PROXY] Using Burp upstream proxy: %s:%d" % (proxy_host, proxy_port))
+                                        break
+            except Exception as e:
+                # 代理配置读取失败，使用直接连接
+                pass
+            
             # 创建连接并配置
-            connection = url.openConnection()
+            if proxy:
+                connection = url.openConnection(proxy)
+            else:
+                connection = url.openConnection()
+            
             connection.setRequestMethod("POST")
             connection.setDoOutput(True)
-            connection.setConnectTimeout(30000)  # 30秒连接超时
-            connection.setReadTimeout(60000)     # 60秒读取超时
+            
+            # 根据模型类型设置不同的超时时间
+            if customApiUrl and ("localhost" in str(customApiUrl) or "127.0.0.1" in str(customApiUrl)):
+                # 本地模型（如Ollama）：更长的超时时间
+                connection.setConnectTimeout(30000)   # 60秒连接超时
+                connection.setReadTimeout(30000)     # 180秒(3分钟)读取超时
+            else:
+                # 云端API：标准超时时间
+                connection.setConnectTimeout(30000)   # 30秒连接超时
+                connection.setReadTimeout(30000)      # 90秒读取超时
 
             # 配置SSL
             if hasattr(connection, 'setSSLSocketFactory'):
@@ -1322,7 +1385,14 @@ def request_dashscope_api(self, api_key, modelName, orgUrl, request_body, custom
             if api_key:
                 api_key_str = str(api_key).strip()
                 if api_key_str:
+                    # 统一使用Bearer认证（OpenAI标准格式）
                     connection.setRequestProperty("Authorization", "Bearer " + api_key_str)
+            
+            # 调试：打印API请求信息（首次尝试时）
+            if retry_count == 0:
+                if "localhost" in str(api_url) or "127.0.0.1" in str(api_url):
+                    print("[OLLAMA DEBUG] API URL: %s" % api_url)
+                    print("[OLLAMA DEBUG] Model: %s" % modelName)
             
             outputStream = connection.getOutputStream()
             writer = OutputStreamWriter(outputStream, "UTF-8")
@@ -1330,10 +1400,52 @@ def request_dashscope_api(self, api_key, modelName, orgUrl, request_body, custom
             writer.flush()
 
             responseCode = connection.getResponseCode()
+            
+            # 打印首次请求的响应码（调试用）
+            if retry_count == 0:
+                try:
+                    print("[AI DEBUG] Response Code: %d" % responseCode)
+                except:
+                    pass
 
             if responseCode == HttpURLConnection.HTTP_OK or responseCode == HttpURLConnection.HTTP_CREATED:
                 inputStream = connection.getInputStream()
                 AI_res = read_response(self, inputStream)
+                
+                # 打印首次请求的响应预览（调试用）
+                if retry_count == 0:
+                    try:
+                        print("[AI DEBUG] Response length: %d" % (len(str(AI_res)) if AI_res else 0))
+                        if AI_res:
+                            print("[AI DEBUG] Response preview: %s..." % str(AI_res)[:200])
+                    except Exception as debug_err:
+                        print("[AI DEBUG] Failed to print response preview: %s" % str(debug_err))
+                
+                # 检查Ollama模型加载状态
+                # 判断是否是本地Ollama：检查API URL是否包含localhost/127.0.0.1
+                is_local_api = api_url and ("localhost" in str(api_url) or "127.0.0.1" in str(api_url))
+                
+                # 检查响应中是否有"finish_reason":"load"
+                if AI_res and '"finish_reason":"load"' in str(AI_res):
+                    if is_local_api:
+                        # 本地Ollama：重试
+                        retry_count += 1
+                        if retry_count < max_retries:
+                            print("[OLLAMA] Model is loading, retrying in 3 seconds... (Attempt %d/%d)" % (retry_count, max_retries))
+                            print("[OLLAMA DEBUG] Response: %s" % str(AI_res)[:200])
+                            time.sleep(3)
+                            continue
+                        else:
+                            print("[OLLAMA ERROR] Model failed to load after %d retries" % max_retries)
+                            print("  Response: %s" % str(AI_res)[:500])
+                            print("-" * 80)
+                            return ""
+                    else:
+                        # 云端API也返回load状态？打印警告但继续处理
+                        print("[WARNING] Received 'load' status from cloud API, ignoring...")
+                        print("  API URL: %s" % api_url)
+                        print("  Response preview: %s" % str(AI_res)[:200])
+                
                 result_dict = extract_res_value(self, AI_res)
                 res_value = result_dict.get("res", "")
                 reason = result_dict.get("reason", "")
@@ -1341,16 +1453,36 @@ def request_dashscope_api(self, api_key, modelName, orgUrl, request_body, custom
                 # 保存reason以便后续使用
                 self._last_ai_reason = reason
                 
+                # 打印解析结果（调试用）
+                if retry_count == 0:
+                    try:
+                        reason_len = len(str(reason)) if reason else 0
+                        print("[AI DEBUG] Parsed result: res=%s, reason_length=%d" % (res_value if res_value else "EMPTY", reason_len))
+                    except Exception as debug_err:
+                        print("[AI DEBUG] Parsed result: res=%s (reason parsing failed)" % (res_value if res_value else "EMPTY"))
+                
                 # 如果结果为空，输出警告
                 if not res_value:
-                    timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                    print("[WARNING] Failed to extract AI analysis result")
-                    print("  URL: %s" % str(orgUrl))
-                    print("  Status: %s" % str(responseCode))
-                    print("  Response length: %d" % (len(str(AI_res)) if AI_res else 0))
-                    if AI_res and len(str(AI_res)) < 500:
-                        print("  Response preview: %s" % str(AI_res)[:200])
-                    print("-" * 80)
+                    try:
+                        timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                        print("=" * 80)
+                        print("[AI PARSE FAILED] Failed to extract AI analysis result")
+                        print("  URL: %s" % str(orgUrl))
+                        print("  Model: %s" % modelName)
+                        print("  API URL: %s" % api_url)
+                        print("  Status: %s" % str(responseCode))
+                        print("  Response length: %d" % (len(str(AI_res)) if AI_res else 0))
+                        if AI_res:
+                            # 打印更多响应内容以便调试
+                            ai_res_str = str(AI_res)
+                            preview_length = min(1000, len(ai_res_str))
+                            print("  Response content:")
+                            print("  " + ai_res_str[:preview_length])
+                            if len(ai_res_str) > preview_length:
+                                print("  ... (truncated, total length: %d)" % len(ai_res_str))
+                        print("=" * 80)
+                    except Exception as print_err:
+                        print("[AI ERROR] Failed to print debug info: %s" % str(print_err))
                 
                 if res_value:
                     return res_value
@@ -1410,70 +1542,138 @@ def request_dashscope_api(self, api_key, modelName, orgUrl, request_body, custom
                             continue
                     
                     # 最终失败，输出错误信息
-                    timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                    print("[API ERROR] Request failed after %d retries" % max_retries)
-                    print("  URL: %s" % str(orgUrl))
-                    print("  Status: %s" % str(responseCode))
-                    print("  Error: %s" % error_response[:500] if error_response else "Unknown error")
-                    print("-" * 80)
+                    try:
+                        timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                        print("=" * 80)
+                        print("[API ERROR] Request failed after %d retries" % max_retries)
+                        print("  URL: %s" % str(orgUrl))
+                        print("  Model: %s" % modelName)
+                        print("  API URL: %s" % api_url)
+                        print("  Status: %s" % str(responseCode))
+                        if error_response:
+                            print("  Error: %s" % str(error_response)[:1000])
+                        else:
+                            print("  Error: Unknown error")
+                        print("=" * 80)
+                    except Exception as print_err:
+                        print("[API ERROR] Request failed (failed to print details): %s" % str(print_err))
                     return ""
                 else:
                     # 没有错误流，但状态码不是200
-                    timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                    print("[API ERROR] Request failed with status code %s" % str(responseCode))
-                    print("  URL: %s" % str(orgUrl))
-                    print("  No error response available")
-                    print("-" * 80)
+                    try:
+                        timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                        print("=" * 80)
+                        print("[API ERROR] Request failed with status code %s" % str(responseCode))
+                        print("  URL: %s" % str(orgUrl))
+                        print("  Model: %s" % modelName)
+                        print("  API URL: %s" % api_url)
+                        print("  No error response available")
+                        print("=" * 80)
+                    except Exception as print_err:
+                        print("[API ERROR] Request failed (failed to print details): %s" % str(print_err))
                     return ""
                 
+        except SocketTimeoutException as e:
+            retry_count += 1
+            if retry_count >= max_retries:
+                try:
+                    print("=" * 80)
+                    print("[API ERROR] Request timeout after %d retries" % max_retries)
+                    print("  URL: %s" % str(orgUrl))
+                    print("  Model: %s" % modelName)
+                    print("  API URL: %s" % api_url)
+                    print("  Timeout limit: 60 seconds")
+                    print("  Tip: Check network connection or try increasing timeout")
+                    print("=" * 80)
+                except:
+                    print("[API ERROR] Request timeout")
+                return ""
+            # 超时后静默重试，不打印日志避免刷屏
+            continue
+            
         except SSLHandshakeException as e:
             retry_count += 1
-            timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             if retry_count == max_retries:
-                print("[API ERROR] SSL Handshake failed after %d retries" % max_retries)
-                print("  URL: %s" % str(orgUrl))
-                print("  Error: %s" % str(e))
-                print("-" * 80)
+                try:
+                    print("=" * 80)
+                    print("[API ERROR] SSL Handshake failed after %d retries" % max_retries)
+                    print("  URL: %s" % str(orgUrl))
+                    print("  Model: %s" % modelName)
+                    print("  API URL: %s" % api_url)
+                    print("  Error: %s" % str(e))
+                    print("  Tip: Check proxy settings or SSL certificates")
+                    print("=" * 80)
+                except:
+                    print("[API ERROR] SSL Handshake failed")
                 return ""
-            print("[API ERROR] SSL Handshake failed (Retry %d/%d): %s" % (retry_count, max_retries, str(e)))
+            try:
+                print("[API ERROR] SSL Handshake failed (Retry %d/%d): %s" % (retry_count, max_retries, str(e)))
+            except:
+                pass
             continue
             
         except EOFException as e:
             retry_count += 1
-            timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             if retry_count == max_retries:
-                print("[API ERROR] Connection closed unexpectedly after %d retries" % max_retries)
-                print("  URL: %s" % str(orgUrl))
-                print("  Error: %s" % str(e))
-                print("-" * 80)
+                try:
+                    print("=" * 80)
+                    print("[API ERROR] Connection closed unexpectedly after %d retries" % max_retries)
+                    print("  URL: %s" % str(orgUrl))
+                    print("  Model: %s" % modelName)
+                    print("  API URL: %s" % api_url)
+                    print("  Error: %s" % str(e))
+                    print("=" * 80)
+                except:
+                    print("[API ERROR] Connection closed unexpectedly")
                 return ""
-            print("[API ERROR] Connection closed (Retry %d/%d): %s" % (retry_count, max_retries, str(e)))
+            try:
+                print("[API ERROR] Connection closed (Retry %d/%d): %s" % (retry_count, max_retries, str(e)))
+            except:
+                pass
             continue
             
         except SocketException as e:
             retry_count += 1
-            timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             if retry_count == max_retries:
-                print("[API ERROR] Network error after %d retries" % max_retries)
-                print("  URL: %s" % str(orgUrl))
-                print("  Error: %s" % str(e))
-                print("-" * 80)
+                try:
+                    print("=" * 80)
+                    print("[API ERROR] Network error after %d retries" % max_retries)
+                    print("  URL: %s" % str(orgUrl))
+                    print("  Model: %s" % modelName)
+                    print("  API URL: %s" % api_url)
+                    print("  Error: %s" % str(e))
+                    print("  Tip: Check network connection and proxy settings")
+                    print("=" * 80)
+                except:
+                    print("[API ERROR] Network error")
                 return ""
-            print("[API ERROR] Network error (Retry %d/%d): %s" % (retry_count, max_retries, str(e)))
+            try:
+                print("[API ERROR] Network error (Retry %d/%d): %s" % (retry_count, max_retries, str(e)))
+            except:
+                pass
             continue
             
         except Exception as e:
             retry_count += 1
-            timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            if retry_count == max_retries:
-                print("[API ERROR] Unexpected error after %d retries" % max_retries)
+            # 打印详细错误信息（即使不是最后一次重试）
+            try:
+                print("=" * 80)
+                print("[API ERROR] Unexpected error (Attempt %d/%d)" % (retry_count, max_retries))
                 print("  URL: %s" % str(orgUrl))
+                print("  Model: %s" % modelName)
+                print("  API URL: %s" % api_url)
                 print("  Error: %s" % str(e))
-                import traceback
-                print("  Traceback: %s" % traceback.format_exc()[:500])
-                print("-" * 80)
-                return ""
-            print("[API ERROR] Unexpected error (Retry %d/%d): %s" % (retry_count, max_retries, str(e)))
+                if retry_count == max_retries:
+                    import traceback
+                    print("  Traceback: %s" % traceback.format_exc()[:1000])
+                    print("=" * 80)
+                    return ""
+                print("  Retrying...")
+                print("=" * 80)
+            except:
+                print("[API ERROR] Unexpected error occurred")
+                if retry_count == max_retries:
+                    return ""
             continue
         finally:
             # 确保所有资源都被正确关闭
@@ -1671,6 +1871,10 @@ def checkAuthorization(self, messageInfo, originalHeaders, checkUnauthorized):
         row = self._log.size()
         method = self._helpers.analyzeRequest(messageInfo.getRequest()).getMethod()
 
+        # 记录AI分析结果状态
+        if AI_res:
+            print("[AI] Result recorded: %s for URL: %s" % (AI_res, str(oriUrl)[:80]))
+
         if checkUnauthorized:
             self._log.add(
                 LogEntry(self.currentRequestNumber, self._callbacks.saveBuffersToTempFiles(requestResponse), method,
@@ -1684,7 +1888,12 @@ def checkAuthorization(self, messageInfo, originalHeaders, checkUnauthorized):
                          self._helpers.analyzeRequest(requestResponse).getUrl(), messageInfo, impression, None, "Disabled",
                          AI_res))
 
+        # 先插入行数据，然后如果有AI结果，再更新该行以确保显示
         SwingUtilities.invokeLater(UpdateTableEDT(self, "insert", row, row))
+        # 如果有AI分析结果，再次触发行更新以确保所有列都能正确显示
+        if AI_res:
+            SwingUtilities.invokeLater(UpdateTableEDT(self, "update", row, row))
+        
         self.currentRequestNumber += 1
     finally:
         self._lock.release()
