@@ -1007,7 +1007,9 @@ def extract_res_value(self, response_string):
                     content = message.get('content', '')
                     if content:
                         # 检查是否是双重转义的JSON（如 deepseek 返回的格式）
-                        if 'res\\' in content or 'res\\\\' in content:
+                        # content内容如: res\":\"true\",\"reason\":\"xxx\"
+                        # 这表示JSON中的 \" 被保留成了 \\"
+                        if '\\\"' in content or '\\\\' in content:
                             # 双重转义：需要先修复
                             fixed_content = content.replace('\\\"', '"').replace('\\\\', '\\')
                             print("[AI PARSE] Fixed double-escaped content: %s" % fixed_content[:100])
