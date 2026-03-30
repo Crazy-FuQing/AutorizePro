@@ -85,8 +85,9 @@ CHOICES_CONTENT_PATTERN = re.compile(r'"choices":\s*\[\s*{.*?"message":\s*{.*?"c
 HUNYUAN_PATTERN = re.compile(r'"content"\s*:\s*"```json\\\\n{\\\\"res\\\\":\\\\"(\w+)\\\\"')
 QIANWEN_PATTERN = re.compile(r'content.*?```.*?res.*?[\'"](\w+)[\'"].*?```', re.DOTALL)
 GLM_PATTERN = re.compile(r'content.*?res.*?[\'"](\w+)[\'"]', re.DOTALL)
-LOOSE_PATTERN = re.compile(r'[\'"]res[\'"]:\s*[\'"](\w+)[\'"]|"res":\s*"(\w+)"|\\+"res\\+":\s*\\+"(\w+)\\+"', re.IGNORECASE | re.DOTALL)
+LOOSE_PATTERN = re.compile(r'[\'"]res[\'"]:\s*[\'\"](\w+)[\'"]|"res":\s*"(\w+)"|\\+"res\\+":\s*\\+"(\w+)\\+"', re.IGNORECASE | re.DOTALL)
 HUNYUAN_CONTENT_PATTERN = re.compile(r'"choices":\s*\[\s*{\s*"index":\s*\d+,\s*"message":\s*{\s*"role":\s*"assistant",\s*"content":\s*"(.*?)"', re.DOTALL)
+DOUBLE_ESCAPED_RES_PATTERN = re.compile(r'res\\\":\\\"|res\\\\\":\\\\\"')
 
 ai_analysis_cache = {}
 MAX_CACHE_SIZE = 100
@@ -1005,6 +1006,12 @@ def extract_res_value(self, response_string):
                     message = choices[0].get('message', {})
                     content = message.get('content', '')
                     if content:
+                        # 检查是否是双重转义的JSON（如 deepseek 返回的格式）
+                        if 'res\\' in content or 'res\\\\' in content:
+                            # 双重转义：需要先修复
+                            fixed_content = content.replace('\\\"', '"').replace('\\\\', '\\')
+                            print("[AI PARSE] Fixed double-escaped content: %s" % fixed_content[:100])
+                            return extract_res_value(self, fixed_content)
                         # 递归调用处理content内容
                         return extract_res_value(self, content)
                     else:
