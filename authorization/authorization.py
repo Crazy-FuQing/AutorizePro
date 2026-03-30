@@ -1007,6 +1007,10 @@ def extract_res_value(self, response_string):
                     if content:
                         # 递归调用处理content内容
                         return extract_res_value(self, content)
+                    else:
+                        # content为空，尝试直接解析整个响应
+                        print("[AI PARSE] Warning: content is empty in choices, trying direct parse")
+                        pass
         except ValueError as json_err:
             # JSON 解析失败：不是有效的 JSON 格式，继续其他解析方式
             pass

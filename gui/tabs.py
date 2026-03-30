@@ -64,18 +64,6 @@ class Tabs():
 
         self._extender.logTable = Table(self._extender)
 
-        tableWidth = self._extender.logTable.getPreferredSize().width
-        self._extender.logTable.getColumn("ID").setPreferredWidth(Math.round(tableWidth / 50 * 2))
-        self._extender.logTable.getColumn(get_text("table_method", "Method")).setPreferredWidth(Math.round(tableWidth / 50 * 3))
-        self._extender.logTable.getColumn(get_text("table_url", "URL")).setPreferredWidth(Math.round(tableWidth / 50 * 25))
-        self._extender.logTable.getColumn(get_text("table_originals_len", "Orig. Len")).setPreferredWidth(Math.round(tableWidth / 50 * 4))
-        self._extender.logTable.getColumn(get_text("table_modified_len", "Modif. Len")).setPreferredWidth(Math.round(tableWidth / 50 * 4))
-        self._extender.logTable.getColumn(get_text("table_unauthorized_len", "Unauth. Len")).setPreferredWidth(Math.round(tableWidth / 50 * 4))
-        self._extender.logTable.getColumn(get_text("table_status", "Authz. Status")).setPreferredWidth(Math.round(tableWidth / 50 * 4))
-        self._extender.logTable.getColumn(get_text("table_unauthorized_status", "Unauth. Status")).setPreferredWidth(Math.round(tableWidth / 50 * 4))
-        self._extender.logTable.getColumn(get_text("table_ai_analyzer", "AI. Analyzer")).setPreferredWidth(Math.round(tableWidth / 50 * 4))
-
-
         self._extender.tableSorter = TableRowSorter(self._extender.tableModel)
         rowFilter = TableRowFilter(self._extender)
         self._extender.tableSorter.setRowFilter(rowFilter)
@@ -87,6 +75,20 @@ class Tabs():
         self._extender.scrollPane.setMinimumSize(Dimension(1,1))
         self._extender._splitpane.setLeftComponent(self._extender.scrollPane)
         self._extender.scrollPane.getVerticalScrollBar().addAdjustmentListener(AutoScrollListener(self._extender))
+
+        self._extender.logTable.getColumnModel().getColumn(0).setPreferredWidth(450)
+        
+        tableWidth = self._extender.scrollPane.getViewport().getWidth()
+        if tableWidth <= 0:
+            tableWidth = 800
+        self._extender.logTable.getColumn(get_text("table_method", "Method")).setPreferredWidth(Math.round(tableWidth / 50 * 3))
+        self._extender.logTable.getColumn(get_text("table_url", "URL")).setPreferredWidth(Math.round(tableWidth / 50 * 25))
+        self._extender.logTable.getColumn(get_text("table_originals_len", "Orig. Len")).setPreferredWidth(Math.round(tableWidth / 50 * 4))
+        self._extender.logTable.getColumn(get_text("table_modified_len", "Modif. Len")).setPreferredWidth(Math.round(tableWidth / 50 * 4))
+        self._extender.logTable.getColumn(get_text("table_unauthorized_len", "Unauth. Len")).setPreferredWidth(Math.round(tableWidth / 50 * 4))
+        self._extender.logTable.getColumn(get_text("table_status", "Authz. Status")).setPreferredWidth(Math.round(tableWidth / 50 * 4))
+        self._extender.logTable.getColumn(get_text("table_unauthorized_status", "Unauth. Status")).setPreferredWidth(Math.round(tableWidth / 50 * 4))
+        self._extender.logTable.getColumn(get_text("table_ai_analyzer", "AI. Analyzer")).setPreferredWidth(Math.round(tableWidth / 50 * 4))
 
         copyURLitem = JMenuItem("Copy URL")
         copyURLitem.addActionListener(CopySelectedURL(self._extender))
