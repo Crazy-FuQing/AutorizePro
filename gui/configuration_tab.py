@@ -266,14 +266,13 @@ class ConfigurationTab():
                         GroupLayout.PREFERRED_SIZE,
                     )
                     )
-                    .addGap(15)
-                    .addGroup(layout.createParallelGroup(GroupLayout.Alignment.CENTER)
+                )
+                .addGroup(layout.createParallelGroup(GroupLayout.Alignment.CENTER)
                     .addComponent(
                         self._extender.apiKeyEnabledCheckbox,
                         GroupLayout.PREFERRED_SIZE,
                         GroupLayout.PREFERRED_SIZE,
                         GroupLayout.PREFERRED_SIZE,
-                    )
                     )
                 )
                 .addComponent(
@@ -470,6 +469,8 @@ class ConfigurationTab():
                 GroupLayout.PREFERRED_SIZE,
                 GroupLayout.PREFERRED_SIZE,
             )
+            )
+            .addGroup(layout.createParallelGroup(GroupLayout.Alignment.CENTER)
             .addComponent(
                 self._extender.apiKeyEnabledCheckbox,
                 GroupLayout.PREFERRED_SIZE,
